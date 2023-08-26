@@ -1,294 +1,141 @@
 "use strict";
 
-const request = require("supertest");
+/** Routes for users. */
 
-const app = require("../app");
+const jsonschema = require("jsonschema");
 
-const {
-  commonBeforeAll,
-  commonBeforeEach,
-  commonAfterEach,
-  commonAfterAll,
-  testJobIds,
-  u1Token,
-  adminToken,
-} = require("./_testCommon");
+const express = require("express");
+const { ensureCorrectUserOrAdmin, ensureAdmin } = require("../middleware/auth");
+const { BadRequestError } = require("../expressError");
+const User = require("../models/user");
+const { createToken } = require("../helpers/tokens");
+const userNewSchema = require("../schemas/userNew.json");
+const userUpdateSchema = require("../schemas/userUpdate.json");
 
-beforeAll(commonBeforeAll);
-beforeEach(commonBeforeEach);
-afterEach(commonAfterEach);
-afterAll(commonAfterAll);
+const router = express.Router();
 
-/************************************** POST /jobs */
 
-describe("POST /jobs", function () {
-  test("ok for admin", async function () {
-    const resp = await request(app)
-        .post(`/jobs`)
-        .send({
-          companyHandle: "c1",
-          title: "J-new",
-          salary: 10,
-          equity: "0.2",
-        })
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.statusCode).toEqual(201);
-    expect(resp.body).toEqual({
-      job: {
-        id: expect.any(Number),
-        title: "J-new",
-        salary: 10,
-        equity: "0.2",
-        companyHandle: "c1",
-      },
-    });
-  });
+/** POST / { user }  => { user, token }
+ *
+ * Adds a new user. This is not the registration endpoint --- instead, this is
+ * only for admin users to add new users. The new user being added can be an
+ * admin.
+ *
+ * This returns the newly created user and an authentication token for them:
+ *  {user: { username, firstName, lastName, email, isAdmin }, token }
+ *
+ * Authorization required: admin
+ **/
 
-  test("unauth for users", async function () {
-    const resp = await request(app)
-        .post(`/jobs`)
-        .send({
-          companyHandle: "c1",
-          title: "J-new",
-          salary: 10,
-          equity: "0.2",
-        })
-        .set("authorization", `Bearer ${u1Token}`);
-    expect(resp.statusCode).toEqual(401);
-  });
+router.post("/", ensureAdmin, async function (req, res, next) {
+  try {
+    const validator = jsonschema.validate(req.body, userNewSchema);
+    if (!validator.valid) {
+      const errs = validator.errors.map(e => e.stack);
+      throw new BadRequestError(errs);
+    }
 
-  test("bad request with missing data", async function () {
-    const resp = await request(app)
-        .post(`/jobs`)
-        .send({
-          companyHandle: "c1",
-        })
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.statusCode).toEqual(400);
-  });
-
-  test("bad request with invalid data", async function () {
-    const resp = await request(app)
-        .post(`/jobs`)
-        .send({
-          companyHandle: "c1",
-          title: "J-new",
-          salary: "not-a-number",
-          equity: "0.2",
-        })
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.statusCode).toEqual(400);
-  });
-
+    const user = await User.register(req.body);
+    const token = createToken(user);
+    return res.status(201).json({ user, token });
+  } catch (err) {
+    return next(err);
+  }
 });
 
-/************************************** GET /jobs */
 
-describe("GET /jobs", function () {
-  test("ok for anon", async function () {
-    const resp = await request(app).get(`/jobs`);
-    expect(resp.body).toEqual({
-          jobs: [
-            {
-              id: expect.any(Number),
-              title: "J1",
-              salary: 1,
-              equity: "0.1",
-              companyHandle: "c1",
-              companyName: "C1",
-            },
-            {
-              id: expect.any(Number),
-              title: "J2",
-              salary: 2,
-              equity: "0.2",
-              companyHandle: "c1",
-              companyName: "C1",
-            },
-            {
-              id: expect.any(Number),
-              title: "J3",
-              salary: 3,
-              equity: null,
-              companyHandle: "c1",
-              companyName: "C1",
-            },
-          ],
-        },
-    );
-  });
+/** GET / => { users: [ {username, firstName, lastName, email }, ... ] }
+ *
+ * Returns list of all users.
+ *
+ * Authorization required: admin
+ **/
 
-  test("works: filtering", async function () {
-    const resp = await request(app)
-        .get(`/jobs`)
-        .query({ hasEquity: true });
-    expect(resp.body).toEqual({
-          jobs: [
-            {
-              id: expect.any(Number),
-              title: "J1",
-              salary: 1,
-              equity: "0.1",
-              companyHandle: "c1",
-              companyName: "C1",
-            },
-            {
-              id: expect.any(Number),
-              title: "J2",
-              salary: 2,
-              equity: "0.2",
-              companyHandle: "c1",
-              companyName: "C1",
-            },
-          ],
-        },
-    );
-  });
-
-  test("works: filtering on 2 filters", async function () {
-    const resp = await request(app)
-        .get(`/jobs`)
-        .query({ minSalary: 2, title: "3" });
-    expect(resp.body).toEqual({
-          jobs: [
-            {
-              id: expect.any(Number),
-              title: "J3",
-              salary: 3,
-              equity: null,
-              companyHandle: "c1",
-              companyName: "C1",
-            },
-          ],
-        },
-    );
-  });
-
-  test("bad request on invalid filter key", async function () {
-    const resp = await request(app)
-        .get(`/jobs`)
-        .query({ minSalary: 2, nope: "nope" });
-    expect(resp.statusCode).toEqual(400);
-  });
+router.get("/", ensureAdmin, async function (req, res, next) {
+  try {
+    const users = await User.findAll();
+    return res.json({ users });
+  } catch (err) {
+    return next(err);
+  }
 });
 
-/************************************** GET /jobs/:id */
 
-describe("GET /jobs/:id", function () {
-  test("works for anon", async function () {
-    const resp = await request(app).get(`/jobs/${testJobIds[0]}`);
-    expect(resp.body).toEqual({
-      job: {
-        id: testJobIds[0],
-        title: "J1",
-        salary: 1,
-        equity: "0.1",
-        company: {
-          handle: "c1",
-          name: "C1",
-          description: "Desc1",
-          numEmployees: 1,
-          logoUrl: "http://c1.img",
-        },
-      },
-    });
-  });
+/** GET /[username] => { user }
+ *
+ * Returns { username, firstName, lastName, isAdmin, jobs }
+ *   where jobs is { id, title, companyHandle, companyName, state }
+ *
+ * Authorization required: admin or same user-as-:username
+ **/
 
-  test("not found for no such job", async function () {
-    const resp = await request(app).get(`/jobs/0`);
-    expect(resp.statusCode).toEqual(404);
-  });
+router.get("/:username", ensureCorrectUserOrAdmin, async function (req, res, next) {
+  try {
+    const user = await User.get(req.params.username);
+    return res.json({ user });
+  } catch (err) {
+    return next(err);
+  }
 });
 
-/************************************** PATCH /jobs/:id */
 
-describe("PATCH /jobs/:id", function () {
-  test("works for admin", async function () {
-    const resp = await request(app)
-        .patch(`/jobs/${testJobIds[0]}`)
-        .send({
-          title: "J-New",
-        })
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.body).toEqual({
-      job: {
-        id: expect.any(Number),
-        title: "J-New",
-        salary: 1,
-        equity: "0.1",
-        companyHandle: "c1",
-      },
-    });
-  });
+/** PATCH /[username] { user } => { user }
+ *
+ * Data can include:
+ *   { firstName, lastName, password, email }
+ *
+ * Returns { username, firstName, lastName, email, isAdmin }
+ *
+ * Authorization required: admin or same-user-as-:username
+ **/
 
-  test("unauth for others", async function () {
-    const resp = await request(app)
-        .patch(`/jobs/${testJobIds[0]}`)
-        .send({
-          title: "J-New",
-        })
-        .set("authorization", `Bearer ${u1Token}`);
-    expect(resp.statusCode).toEqual(401);
-  });
+router.patch("/:username", ensureCorrectUserOrAdmin, async function (req, res, next) {
+  try {
+    const validator = jsonschema.validate(req.body, userUpdateSchema);
+    if (!validator.valid) {
+      const errs = validator.errors.map(e => e.stack);
+      throw new BadRequestError(errs);
+    }
 
-  test("not found on no such job", async function () {
-    const resp = await request(app)
-        .patch(`/jobs/0`)
-        .send({
-          handle: "new",
-        })
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.statusCode).toEqual(400);
-  });
-
-  test("bad request on handle change attempt", async function () {
-    const resp = await request(app)
-        .patch(`/jobs/${testJobIds[0]}`)
-        .send({
-          handle: "new",
-        })
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.statusCode).toEqual(400);
-  });
-
-  test("bad request with invalid data", async function () {
-    const resp = await request(app)
-        .patch(`/jobs/${testJobIds[0]}`)
-        .send({
-          salary: "not-a-number",
-        })
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.statusCode).toEqual(400);
-  });
+    const user = await User.update(req.params.username, req.body);
+    return res.json({ user });
+  } catch (err) {
+    return next(err);
+  }
 });
 
-/************************************** DELETE /jobs/:id */
 
-describe("DELETE /jobs/:id", function () {
-  test("works for admin", async function () {
-    const resp = await request(app)
-        .delete(`/jobs/${testJobIds[0]}`)
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.body).toEqual({ deleted: testJobIds[0] });
-  });
+/** DELETE /[username]  =>  { deleted: username }
+ *
+ * Authorization required: admin or same-user-as-:username
+ **/
 
-  test("unauth for others", async function () {
-    const resp = await request(app)
-        .delete(`/jobs/${testJobIds[0]}`)
-        .set("authorization", `Bearer ${u1Token}`);
-    expect(resp.statusCode).toEqual(401);
-  });
-
-  test("unauth for anon", async function () {
-    const resp = await request(app)
-        .delete(`/jobs/${testJobIds[0]}`);
-    expect(resp.statusCode).toEqual(401);
-  });
-
-  test("not found for no such job", async function () {
-    const resp = await request(app)
-        .delete(`/jobs/0`)
-        .set("authorization", `Bearer ${adminToken}`);
-    expect(resp.statusCode).toEqual(404);
-  });
+router.delete("/:username", ensureCorrectUserOrAdmin, async function (req, res, next) {
+  try {
+    await User.remove(req.params.username);
+    return res.json({ deleted: req.params.username });
+  } catch (err) {
+    return next(err);
+  }
 });
+
+
+/** POST /[username]/jobs/[id]  { state } => { application }
+ *
+ * Returns {"applied": jobId}
+ *
+ * Authorization required: admin or same-user-as-:username
+ * */
+
+router.post("/:username/jobs/:id", ensureCorrectUserOrAdmin, async function (req, res, next) {
+  try {
+    const jobId = +req.params.id;
+    await User.applyToJob(req.params.username, jobId);
+    return res.json({ applied: jobId });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+
+module.exports = router;
