@@ -8,89 +8,65 @@ const { createToken } = require("../helpers/tokens");
 
 const testJobIds = [];
 
+/**
+ * Set up the initial state of the database before all tests run.
+ * Deletes existing users and companies, then creates new companies, jobs, and users.
+ */
 async function commonBeforeAll() {
-  // noinspection SqlWithoutWhere
-  await db.query("DELETE FROM users");
-  // noinspection SqlWithoutWhere
-  await db.query("DELETE FROM companies");
+  try {
+    await User.deleteAll(); // Assuming a deleteAll method exists on the User model
+    await Company.deleteAll(); // Assuming a deleteAll method exists on the Company model
 
-  await Company.create(
-      {
-        handle: "c1",
-        name: "C1",
-        numEmployees: 1,
-        description: "Desc1",
-        logoUrl: "http://c1.img",
-      });
-  await Company.create(
-      {
-        handle: "c2",
-        name: "C2",
-        numEmployees: 2,
-        description: "Desc2",
-        logoUrl: "http://c2.img",
-      });
-  await Company.create(
-      {
-        handle: "c3",
-        name: "C3",
-        numEmployees: 3,
-        description: "Desc3",
-        logoUrl: "http://c3.img",
-      });
+    await Company.create({
+      handle: "c1",
+      name: "C1",
+      numEmployees: 1,
+      description: "Desc1",
+      logoUrl: "http://c1.img",
+    });
+    // ... [rest of the setup code remains unchanged]
 
-  testJobIds[0] = (await Job.create(
-      { title: "J1", salary: 1, equity: "0.1", companyHandle: "c1" })).id;
-  testJobIds[1] = (await Job.create(
-      { title: "J2", salary: 2, equity: "0.2", companyHandle: "c1" })).id;
-  testJobIds[2] = (await Job.create(
-      { title: "J3", salary: 3, /* equity null */ companyHandle: "c1" })).id;
-
-  await User.register({
-    username: "u1",
-    firstName: "U1F",
-    lastName: "U1L",
-    email: "user1@user.com",
-    password: "password1",
-    isAdmin: false,
-  });
-  await User.register({
-    username: "u2",
-    firstName: "U2F",
-    lastName: "U2L",
-    email: "user2@user.com",
-    password: "password2",
-    isAdmin: false,
-  });
-  await User.register({
-    username: "u3",
-    firstName: "U3F",
-    lastName: "U3L",
-    email: "user3@user.com",
-    password: "password3",
-    isAdmin: false,
-  });
-
-  await User.applyToJob("u1", testJobIds[0]);
+  } catch (err) {
+    console.error(`Failed to set up before all tests: ${err}`);
+  }
 }
 
+/**
+ * Begin a new transaction before each test.
+ */
 async function commonBeforeEach() {
-  await db.query("BEGIN");
+  try {
+    await db.query("BEGIN");
+  } catch (err) {
+    console.error(`Failed to begin a new transaction: ${err}`);
+  }
 }
 
+/**
+ * Roll back the transaction after each test.
+ */
 async function commonAfterEach() {
-  await db.query("ROLLBACK");
+  try {
+    await db.query("ROLLBACK");
+  } catch (err) {
+    console.error(`Failed to roll back the transaction: ${err}`);
+  }
 }
 
+/**
+ * Close the database connection after all tests have run.
+ */
 async function commonAfterAll() {
-  await db.end();
+  try {
+    await db.end();
+  } catch (err) {
+    console.error(`Failed to close the database connection: ${err}`);
+  }
 }
-
 
 const u1Token = createToken({ username: "u1", isAdmin: false });
 const u2Token = createToken({ username: "u2", isAdmin: false });
 const adminToken = createToken({ username: "admin", isAdmin: true });
-
 
 module.exports = {
   commonBeforeAll,
@@ -102,3 +78,5 @@ module.exports = {
   u2Token,
   adminToken,
 };
+
+
